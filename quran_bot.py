@@ -3,17 +3,21 @@ import os, json, time, random, subprocess, requests
 from datetime import datetime
 from pathlib import Path
 
+# Reciteur editions voor alquran.cloud API
 RECITEURS = [
-    {"naam": "Al-Dosari", "server": "server7.mp3quran.net", "pad": "s_dsr"},
-    {"naam": "Mishary",   "server": "server8.mp3quran.net", "pad": "afs"},
-    {"naam": "Sudais",    "server": "server6.mp3quran.net", "pad": "sudais"},
-    {"naam": "Al-Turki",  "server": "server8.mp3quran.net", "pad": "rifai"},
-    {"naam": "Shamsan",   "server": "server8.mp3quran.net", "pad": "shatri"},
+    {"naam": "Al-Dosari",  "edition": "ar.muhammadayyoub"},
+    {"naam": "Mishary",    "edition": "ar.alafasy"},
+    {"naam": "Sudais",     "edition": "ar.abdurrahmaansudais"},
+    {"naam": "Al-Turki",   "edition": "ar.hanirifai"},
+    {"naam": "Shamsan",    "edition": "ar.shaatree"},
 ]
 
 VIDEOS_PER_DAG = 5
 MAX_SEC = 40
 WERKMAP = Path("./tmp")
+API_BASE = "http://api.alquran.cloud/v1"
+CDN_BASE = "https://cdn.islamic.network/quran/audio/128"
+HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
 SEGMENTEN = [
     (1,1,7),(112,1,4),(113,1,5),(114,1,6),(2,255,255),
@@ -24,26 +28,57 @@ SEGMENTEN = [
 ]
 
 THEMAS = ["0d1117","0a1628","1a0a00","0d0d1a","051a05","1a0a1a"]
-HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0"}
 
-def bouw_audio_url(server, pad, surah, ayah):
-    # mp3quran.net formaat: SSSAAA.mp3 (surah 3 cijfers, ayah 3 cijfers)
-    return f"https://{server}/{pad}/{surah:03d}{ayah:03d}.mp3"
+def haal_ayah_nummers(surah, start, eind, edition):
+    """Haal absolute ayah nummers op via alquran.cloud API"""
+    nummers = []
+    try:
+        url = f"{API_BASE}/surah/{surah}/{edition}"
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            print(f"    API fout {r.status_code}")
+            return nummers
+        ayahs = r.json()["data"]["ayahs"]
+        for ayah in ayahs:
+            nr_in_surah = ayah["numberInSurah"]
+            if start <= nr_in_surah <= eind:
+                # Absoluut nummer in hele Quran + audio URL
+                audio_url = ayah.get("audio", "")
+                abs_nummer = ayah["number"]
+                nummers.append((abs_nummer, audio_url))
+    except Exception as e:
+        print(f"    Fout bij ophalen ayah nummers: {e}")
+    return nummers
 
-def download_audio(urls, output):
+def download_audio(nummers, edition, output):
     delen = []
-    for i, url in enumerate(urls):
+    for i, (abs_nr, api_url) in enumerate(nummers):
         tmp = WERKMAP / f"t{i}.mp3"
-        try:
-            r = requests.get(url, timeout=30, headers=HEADERS)
-            if r.status_code == 200 and len(r.content) > 500:
-                tmp.write_bytes(r.content)
-                delen.append(str(tmp))
-                print(f"    ✅ Ayah {i+1} gedownload ({len(r.content)} bytes)")
-            else:
-                print(f"    ❌ {r.status_code} voor ayah {i+1}: {url}")
-        except Exception as e:
-            print(f"    ❌ Fout ayah {i+1}: {e}")
+        
+        # Gebruik audio URL direct uit API response
+        urls_om_te_proberen = []
+        if api_url:
+            urls_om_te_proberen.append(api_url)
+        # Fallback: CDN met absoluut nummer
+        urls_om_te_proberen.append(f"{CDN_BASE}/{edition}/{abs_nr}.mp3")
+        
+        gedownload = False
+        for url in urls_om_te_proberen:
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=30)
+                if r.status_code == 200 and len(r.content) > 500:
+                    tmp.write_bytes(r.content)
+                    delen.append(str(tmp))
+                    print(f"    ✅ Ayah {i+1} ({len(r.content)//1024}KB)")
+                    gedownload = True
+                    break
+                else:
+                    print(f"    ⚠ {r.status_code} voor {url[:60]}")
+            except Exception as e:
+                print(f"    ⚠ {e}")
+        
+        if not gedownload:
+            print(f"    ❌ Ayah {i+1} mislukt")
 
     if not delen:
         return False
@@ -63,7 +98,7 @@ def download_audio(urls, output):
 
 def maak_video(audio, surah, start, naam, output):
     k = random.choice(THEMAS)
-    naam_veilig = naam.replace("'", "").replace('"', "")
+    naam_veilig = naam.replace("'","").replace('"',"")
     vf = (
         f"drawtext=text='{naam_veilig}':fontsize=60:fontcolor=#FFD700:"
         f"x=(w-text_w)/2:y=160:shadowcolor=black@0.8:shadowx=3:shadowy=3,"
@@ -75,10 +110,8 @@ def maak_video(audio, surah, start, naam, output):
         f"x=(w-text_w)/2:y=h-160"
     )
     cmd = [
-        "ffmpeg",
-        "-f", "lavfi", "-i", f"color=c=#{k}:size=1080x1920:rate=30",
-        "-i", str(audio),
-        "-vf", vf,
+        "ffmpeg", "-f", "lavfi", "-i", f"color=c=#{k}:size=1080x1920:rate=30",
+        "-i", str(audio), "-vf", vf,
         "-map", "0:v", "-map", "1:a",
         "-shortest", "-t", str(MAX_SEC),
         "-c:v", "libx264", "-preset", "fast", "-crf", "26",
@@ -91,13 +124,11 @@ def maak_video(audio, surah, start, naam, output):
     return r.returncode == 0
 
 def upload(video, titel, beschr, tags):
-    client_id     = os.environ.get("YT_CLIENT_ID", "")
-    client_secret = os.environ.get("YT_CLIENT_SECRET", "")
-    refresh_token = os.environ.get("YT_REFRESH_TOKEN", "")
-
+    client_id     = os.environ.get("YT_CLIENT_ID","")
+    client_secret = os.environ.get("YT_CLIENT_SECRET","")
+    refresh_token = os.environ.get("YT_REFRESH_TOKEN","")
     if not all([client_id, client_secret, refresh_token]):
-        print("    GEEN SECRETS GEVONDEN")
-        return None
+        print("    GEEN SECRETS"); return None
 
     r = requests.post("https://oauth2.googleapis.com/token", data={
         "client_id": client_id, "client_secret": client_secret,
@@ -105,8 +136,7 @@ def upload(video, titel, beschr, tags):
     })
     at = r.json().get("access_token")
     if not at:
-        print(f"    Token fout: {r.text[:150]}")
-        return None
+        print(f"    Token fout: {r.text[:100]}"); return None
 
     meta = {
         "snippet": {"title": titel[:100], "description": beschr, "tags": tags, "categoryId": "22"},
@@ -114,40 +144,33 @@ def upload(video, titel, beschr, tags):
     }
     r2 = requests.post(
         "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
-        headers={
-            "Authorization": f"Bearer {at}",
-            "Content-Type": "application/json",
-            "X-Upload-Content-Type": "video/mp4",
-            "X-Upload-Content-Length": str(video.stat().st_size)
-        }, json=meta
+        headers={"Authorization": f"Bearer {at}", "Content-Type": "application/json",
+                 "X-Upload-Content-Type": "video/mp4",
+                 "X-Upload-Content-Length": str(video.stat().st_size)},
+        json=meta
     )
     if r2.status_code != 200:
-        print(f"    Initiatie fout: {r2.text[:150]}")
-        return None
+        print(f"    Upload init fout: {r2.text[:100]}"); return None
 
     with open(video, "rb") as f:
-        r3 = requests.put(r2.headers["Location"], headers={"Content-Type": "video/mp4"}, data=f)
+        r3 = requests.put(r2.headers["Location"], headers={"Content-Type":"video/mp4"}, data=f)
 
     if r3.status_code in (200, 201):
-        vid_id = r3.json().get("id", "?")
+        vid_id = r3.json().get("id","?")
         print(f"    ✅ https://youtu.be/{vid_id}")
         return vid_id
-
-    print(f"    Upload fout: {r3.text[:150]}")
-    return None
+    print(f"    Upload fout: {r3.text[:100]}"); return None
 
 def laad_voortgang():
     pad = Path("voortgang.json")
-    if pad.exists():
-        return json.loads(pad.read_text())
-    return {"idx": 0, "totaal": 0, "gedaan": []}
+    return json.loads(pad.read_text()) if pad.exists() else {"idx":0,"totaal":0,"gedaan":[]}
 
 def sla_voortgang(data):
     Path("voortgang.json").write_text(json.dumps(data, indent=2))
 
 def run():
     print(f"\n{'='*52}")
-    print(f"  QURAN SHORTS BOT v3  {datetime.now().strftime('%H:%M  %d/%m/%Y')}")
+    print(f"  QURAN SHORTS BOT v4  {datetime.now().strftime('%H:%M  %d/%m/%Y')}")
     print(f"{'='*52}\n")
 
     WERKMAP.mkdir(parents=True, exist_ok=True)
@@ -162,37 +185,31 @@ def run():
         sleutel = f"{rec['naam']}_{surah}_{start}"
 
         if sleutel in vg["gedaan"]:
-            idx += 1
-            continue
+            idx += 1; continue
 
         print(f"\n[{i+1}/{VIDEOS_PER_DAG}] {rec['naam']} | Surah {surah}:{start}-{eind}")
 
         audio = WERKMAP / f"audio_{i}.mp3"
         video = WERKMAP / f"video_{i}.mp4"
 
-        # Bouw audio URLs via mp3quran.net
-        urls = [bouw_audio_url(rec["server"], rec["pad"], surah, a) for a in range(start, eind+1)]
-        print(f"  Downloaden van mp3quran.net ({len(urls)} ayahs)...")
+        print("  Audio ophalen via alquran.cloud API...")
+        nummers = haal_ayah_nummers(surah, start, eind, rec["edition"])
+        if not nummers:
+            print("  Geen ayah nummers gevonden"); idx += 1; continue
 
-        if not download_audio(urls, audio):
-            print("  Download mislukt, volgende...")
-            idx += 1
-            continue
+        print(f"  {len(nummers)} ayahs downloaden...")
+        if not download_audio(nummers, rec["edition"], audio):
+            print("  Download mislukt"); idx += 1; continue
 
         print("  Video renderen...")
         if not maak_video(audio, surah, start, rec["naam"], video):
-            print("  Video mislukt, volgende...")
-            idx += 1
-            continue
+            print("  Video mislukt"); idx += 1; continue
 
         nr = vg["totaal"] + 1
         titel = f"Surah {surah} | {rec['naam']} | Quran Short #{nr}"
-        beschr = (
-            f"Recitatie door {rec['naam']}\n"
-            f"Surah {surah}, Ayah {start}-{eind}\n\n"
-            f"#Quran #QuranShorts #Islam #{rec['naam'].replace(' ','')} #Shorts #DailyQuran"
-        )
-        tags = ["Quran", "QuranShorts", "Islam", "Shorts", rec["naam"], f"Surah{surah}", "DailyQuran"]
+        beschr = (f"Recitatie door {rec['naam']}\nSurah {surah}, Ayah {start}-{eind}\n\n"
+                  f"#Quran #QuranShorts #Islam #{rec['naam'].replace(' ','')} #Shorts #DailyQuran")
+        tags = ["Quran","QuranShorts","Islam","Shorts",rec["naam"],f"Surah{surah}","DailyQuran"]
 
         print("  Uploaden naar YouTube...")
         vid = upload(video, titel, beschr, tags)
@@ -207,14 +224,12 @@ def run():
             geplaatst += 1
             sla_voortgang(vg)
             if i < VIDEOS_PER_DAG - 1:
-                print("  Wachten 30s...")
-                time.sleep(30)
+                print("  Wachten 30s..."); time.sleep(30)
 
         idx += 1
 
     vg["idx"] = idx
     sla_voortgang(vg)
-
     print(f"\n{'='*52}")
     print(f"  Klaar! {geplaatst}/{VIDEOS_PER_DAG} geplaatst | Totaal: {vg['totaal']}")
     print(f"{'='*52}\n")
