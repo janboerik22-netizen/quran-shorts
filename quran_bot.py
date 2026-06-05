@@ -54,47 +54,44 @@ def download_audio(nummers, edition, output):
     delen = []
     for i, (abs_nr, api_url) in enumerate(nummers):
         tmp = WERKMAP / f"t{i}.mp3"
-        
-        # Gebruik audio URL direct uit API response
-        urls_om_te_proberen = []
+        urls = []
         if api_url:
-            urls_om_te_proberen.append(api_url)
-        # Fallback: CDN met absoluut nummer
-        urls_om_te_proberen.append(f"{CDN_BASE}/{edition}/{abs_nr}.mp3")
+            urls.append(api_url)
+        urls.append(f"{CDN_BASE}/{edition}/{abs_nr}.mp3")
         
-        gedownload = False
-        for url in urls_om_te_proberen:
+        for url in urls:
             try:
                 r = requests.get(url, headers=HEADERS, timeout=30)
                 if r.status_code == 200 and len(r.content) > 500:
                     tmp.write_bytes(r.content)
-                    delen.append(str(tmp))
+                    delen.append(tmp)
                     print(f"    ✅ Ayah {i+1} ({len(r.content)//1024}KB)")
-                    gedownload = True
                     break
-                else:
-                    print(f"    ⚠ {r.status_code} voor {url[:60]}")
             except Exception as e:
                 print(f"    ⚠ {e}")
-        
-        if not gedownload:
-            print(f"    ❌ Ayah {i+1} mislukt")
 
+    print(f"    {len(delen)}/{len(nummers)} ayahs succesvol gedownload")
     if not delen:
         return False
 
+    output = Path(output)
     if len(delen) == 1:
-        import shutil; shutil.move(delen[0], output)
+        delen[0].rename(output)
     else:
         lp = WERKMAP / "concat.txt"
-        lp.write_text("\n".join(f"file '{p}'" for p in delen))
-        subprocess.run(["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(lp),
-                        "-c", "copy", str(output), "-y"], capture_output=True)
+        lp.write_text("\n".join(f"file \'{p.resolve()}\'" for p in delen))
+        result = subprocess.run(
+            ["ffmpeg", "-f", "concat", "-safe", "0",
+             "-i", str(lp.resolve()), "-c", "copy", str(output), "-y"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"    concat fout: {result.stderr[-150:]}")
         for d in delen:
-            try: os.remove(d)
+            try: d.unlink()
             except: pass
 
-    return Path(output).exists()
+    return output.exists()
 
 def maak_video(audio, surah, start, naam, output):
     k = random.choice(THEMAS)
