@@ -190,7 +190,7 @@ def meet_duraties(ayahs, edition):
             ay["duur"] = 4.0
 
 # ─── TEKST WRAPPEN ────────────────────────────────────────────────────────────
-def wrap(tekst, breedte=42):
+def wrap(tekst, breedte=32):
     """Wikkel lange tekst naar meerdere regels."""
     if not tekst:
         return ""
@@ -256,39 +256,40 @@ def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
         t_end  = t + duur
         tijdw  = f"between(t,{t:.2f},{t_end:.2f})"
 
-        ar_tekst = escape_ffmpeg(wrap(ay.get("ar",""), 30))
-        en_tekst = escape_ffmpeg(wrap(ay.get("en",""), 44))
-        nl_tekst = escape_ffmpeg(wrap(ay.get("nl",""), 44))
+        ar_tekst = escape_ffmpeg(wrap(ay.get("ar",""), 26))
+        en_tekst = escape_ffmpeg(wrap(ay.get("en",""), 36))
+        nl_tekst = escape_ffmpeg(wrap(ay.get("nl",""), 36))
 
-        y_ar = "h-520"
-        y_en = "h-380"
-        y_nl = "h-240"
+        # Tekstblok gecentreerd iets onder het midden (y=960 = midden van 1920)
+        y_ar = "680"
+        y_en = "840"
+        y_nl = "980"
 
         if ar_tekst:
             filters.append(
                 f"drawtext=text='{ar_tekst}':"
-                f"fontsize=52:fontcolor=#FFD700:"
+                f"fontsize=44:fontcolor=#FFD700:"
                 f"x=(w-text_w)/2:y={y_ar}:"
                 f"shadowcolor=black@0.95:shadowx=3:shadowy=3:"
-                f"box=1:boxcolor=black@0.55:boxborderw=14:"
+                f"box=1:boxcolor=black@0.6:boxborderw=16:"
                 f"enable='{tijdw}'"
             )
         if en_tekst:
             filters.append(
                 f"drawtext=text='{en_tekst}':"
-                f"fontsize=34:fontcolor=white:"
+                f"fontsize=30:fontcolor=white:"
                 f"x=(w-text_w)/2:y={y_en}:"
                 f"shadowcolor=black@0.9:shadowx=2:shadowy=2:"
-                f"box=1:boxcolor=black@0.5:boxborderw=10:"
+                f"box=1:boxcolor=black@0.55:boxborderw=12:"
                 f"enable='{tijdw}'"
             )
         if nl_tekst:
             filters.append(
                 f"drawtext=text='{nl_tekst}':"
-                f"fontsize=34:fontcolor=#CCCCCC:"
+                f"fontsize=30:fontcolor=#DDDDDD:"
                 f"x=(w-text_w)/2:y={y_nl}:"
                 f"shadowcolor=black@0.9:shadowx=2:shadowy=2:"
-                f"box=1:boxcolor=black@0.5:boxborderw=10:"
+                f"box=1:boxcolor=black@0.55:boxborderw=12:"
                 f"enable='{tijdw}'"
             )
         t = t_end
