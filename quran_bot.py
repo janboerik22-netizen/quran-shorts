@@ -8,21 +8,31 @@ RECITEURS = [
     {"naam": "Al-Dosari",  "edition": "ar.muhammadayyoub"},
     {"naam": "Mishary",    "edition": "ar.alafasy"},
     {"naam": "Sudais",     "edition": "ar.abdurrahmaansudais"},
-    {"naam": "Al-Afasy",   "edition": "ar.alafasy"},      # vervanger voor Al-Turki
+    {"naam": "Al-Afasy",   "edition": "ar.alafasy"},
     {"naam": "Shamsan",    "edition": "ar.shaatree"},
 ]
 
 # ─── INSTELLINGEN ─────────────────────────────────────────────────────────────
-VIDEOS_PER_DAG = 5
+# BELANGRIJK: verlaagd van 5 naar 3. Elke upload kost 1600 quota-units.
+# Gratis YouTube Data API quota = 10.000 units/dag.
+# 3 uploads = 4800 units -> ruime marge over voor de losse metadata-calls
+# en voor eventuele retries zonder dat je over de limiet gaat.
+VIDEOS_PER_DAG = 3
 MAX_SEC        = 59
 WERKMAP        = Path("./tmp")
 API_BASE       = "http://api.alquran.cloud/v1"
 CDN_BASE       = "https://cdn.islamic.network/quran/audio/128"
 HEADERS        = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
-# Achtergrond — gratis Unsplash moskee foto (vaste URL, geen API key nodig)
-BG_URL  = "https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=1080&q=85"
-BG_PAD  = WERKMAP / "moskee_bg.jpg"
+# ── Meerdere achtergronden i.p.v. 1 vaste foto ────────────────────────────────
+BG_URLS = [
+    "https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=1080&q=85",  # moskee interieur
+    "https://images.unsplash.com/photo-1591604129939-f1efa4d9f7fa?w=1080&q=85",  # moskee koepel
+    "https://images.unsplash.com/photo-1519817650390-64a93db51149?w=1080&q=85",  # minaret zonsondergang
+    "https://images.unsplash.com/photo-1564769625392-651b2c7e1c73?w=1080&q=85",  # moskee nacht
+    "https://images.unsplash.com/photo-1600001780252-d8d1d5c8f8f2?w=1080&q=85",  # woestijn/lucht
+]
+WERKMAP_BG = WERKMAP / "bgs"
 
 # ─── SEGMENTEN ────────────────────────────────────────────────────────────────
 SEGMENTEN = [
@@ -33,54 +43,43 @@ SEGMENTEN = [
     (3,1,10),(4,1,10),(5,1,10),(7,1,10),(10,1,10),
 ]
 
-# ─── VERTALINGEN API ──────────────────────────────────────────────────────────
-# Engels  : en.sahih   (Saheeh International)
-# Nederlands : nl.keyzer (Mohammed Keyzer)
 EN_EDITION = "en.sahih"
 NL_EDITION = "nl.keyzer"
 
-# ─── ACHTERGROND DOWNLOADEN ───────────────────────────────────────────────────
-def zorg_achtergrond():
-    """Download moskee achtergrond eenmalig."""
-    if BG_PAD.exists() and BG_PAD.stat().st_size > 10_000:
-        return True
-    print("  📥 Achtergrondafbeelding downloaden...")
-    try:
-        r = requests.get(BG_URL, headers=HEADERS, timeout=30)
-        if r.status_code == 200:
-            BG_PAD.write_bytes(r.content)
-            print(f"  ✅ Achtergrond opgeslagen ({len(r.content)//1024}KB)")
-            return True
-    except Exception as e:
-        print(f"  ⚠ Achtergrond download mislukt: {e}")
-    return False
+# ─── ACHTERGRONDEN DOWNLOADEN ─────────────────────────────────────────────────
+def zorg_achtergronden():
+    """Download alle achtergrondfoto's eenmalig (als ze nog niet bestaan)."""
+    WERKMAP_BG.mkdir(parents=True, exist_ok=True)
+    paden = []
+    for i, url in enumerate(BG_URLS):
+        pad = WERKMAP_BG / f"bg_{i}.jpg"
+        if pad.exists() and pad.stat().st_size > 10_000:
+            paden.append(pad)
+            continue
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            if r.status_code == 200 and len(r.content) > 10_000:
+                pad.write_bytes(r.content)
+                paden.append(pad)
+                print(f"  ✅ Achtergrond {i+1}/{len(BG_URLS)} opgeslagen")
+        except Exception as e:
+            print(f"  ⚠ Achtergrond {i+1} mislukt: {e}")
+    return paden
 
 # ─── AYAH DATA OPHALEN ────────────────────────────────────────────────────────
 def haal_ayah_data(surah, start, eind, edition):
-    """
-    Haalt per ayah op:
-      - absoluut nummer
-      - audio URL
-      - Arabische tekst
-      - Engelse vertaling
-      - Nederlandse vertaling
-    Geeft lijst van dicts terug.
-    """
     ayahs = []
     try:
-        # Arabisch + audio
         url_ar = f"{API_BASE}/surah/{surah}/{edition}"
         r_ar   = requests.get(url_ar, headers=HEADERS, timeout=20)
         if r_ar.status_code != 200:
             print(f"    AR API fout {r_ar.status_code}"); return ayahs
         data_ar = r_ar.json()["data"]["ayahs"]
 
-        # Engelse vertaling
         url_en = f"{API_BASE}/surah/{surah}/{EN_EDITION}"
         r_en   = requests.get(url_en, headers=HEADERS, timeout=20)
         data_en = r_en.json()["data"]["ayahs"] if r_en.status_code == 200 else []
 
-        # Nederlandse vertaling
         url_nl = f"{API_BASE}/surah/{surah}/{NL_EDITION}"
         r_nl   = requests.get(url_nl, headers=HEADERS, timeout=20)
         data_nl = r_nl.json()["data"]["ayahs"] if r_nl.status_code == 200 else []
@@ -154,11 +153,6 @@ def download_audio_lijst(ayahs, edition, output):
 
 # ─── AUDIO DURATIES METEN ─────────────────────────────────────────────────────
 def meet_duraties(ayahs, edition):
-    """
-    Meet de duur van elk ayah-audiobestand zodat we weten
-    hoe lang elke tekst getoond moet worden.
-    Vult ayah["duur"] in (seconden, float).
-    """
     for i, ay in enumerate(ayahs):
         pad = WERKMAP / f"dur_{i}.mp3"
         urls = []
@@ -189,67 +183,76 @@ def meet_duraties(ayahs, edition):
         if "duur" not in ay:
             ay["duur"] = 4.0
 
-# ─── TEKST WRAPPEN ────────────────────────────────────────────────────────────
+# ─── TEKST HELPERS ────────────────────────────────────────────────────────────
 def wrap(tekst, breedte=32):
-    """Wikkel lange tekst naar meerdere regels."""
     if not tekst:
         return ""
     regels = textwrap.wrap(tekst, width=breedte)
-    return r"\n".join(regels)  # ffmpeg escape
+    return r"\n".join(regels)
 
 def escape_ffmpeg(tekst):
-    """Escape speciale tekens voor ffmpeg drawtext."""
     return (tekst
         .replace("\\", "\\\\")
-        .replace("'",  "\u2019")   # rechte apostrof → typografisch
+        .replace("'",  "\u2019")
         .replace(":",  r"\:")
         .replace(",",  r"\,")
         .replace("[",  r"\[")
         .replace("]",  r"\]")
     )
 
-# ─── VIDEO RENDEREN ───────────────────────────────────────────────────────────
-def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
+# ─── VIDEO RENDEREN (verbeterde visuals) ──────────────────────────────────────
+def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
     """
-    Bouwt een 1080×1920 Short met:
-      - Moskee achtergrond (donker overlay)
-      - Reciteur naam + Surah info bovenin
-      - Per-ayah gesynchroniseerde tekst onderin:
-          Arabisch (groot, wit/goud)
-          Engels   (medium, wit)
-          Nederlands (medium, lichtgrijs)
+    Verbeteringen t.o.v. v5:
+      - Random achtergrond per video i.p.v. altijd dezelfde
+      - Langzame Ken Burns zoom op de achtergrond (subtiele beweging)
+      - Duidelijkere 'actieve ayah' highlight met gouden rand-achtige box
+      - Voortgangsbalk onderaan die meeloopt met de audio
+      - Iets sterkere vignette voor leesbaarheid
     """
     naam_veilig = escape_ffmpeg(naam)
-
-    # ── Bouw drawtext filters ──────────────────────────────────────────────
     filters = []
 
-    # 1) Achtergrond schalen naar 1080×1920
-    if gebruik_bg:
-        schaal = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
-        # Donker overlay via colorchannelmixer
-        overlay = "colorchannelmixer=rr=0.4:gg=0.4:bb=0.4"
-        vf_basis = f"{schaal},{overlay}"
+    if bg_pad and Path(bg_pad).exists():
+        # Ken Burns: langzame zoom-in over de hele duur van de video
+        fps = 30
+        totaal_frames = max(1, int(totale_duur * fps))
+        zoom_expr = f"zoom+0.0006"
+        vf_basis = (
+            f"scale=1350:2400,"
+            f"zoompan=z='min({zoom_expr},1.25)':d={totaal_frames}:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps={fps},"
+            f"colorchannelmixer=rr=0.35:gg=0.35:bb=0.35,"
+            f"vignette=PI/3.2"
+        )
     else:
-        vf_basis = None   # color filter — zie cmd hieronder
+        vf_basis = None
 
-    # 2) Header: reciteur naam
+    # Header
     filters.append(
         f"drawtext=text='{naam_veilig}':"
         f"fontsize=58:fontcolor=#FFD700:"
-        f"x=(w-text_w)/2:y=120:"
+        f"x=(w-text_w)/2:y=110:"
         f"shadowcolor=black@0.9:shadowx=3:shadowy=3:"
-        f"box=1:boxcolor=black@0.4:boxborderw=12"
+        f"box=1:boxcolor=black@0.45:boxborderw=14"
     )
-    # 3) Header: Surah info
     filters.append(
         f"drawtext=text='Surah {surah}':"
-        f"fontsize=42:fontcolor=white:"
-        f"x=(w-text_w)/2:y=200:"
+        f"fontsize=40:fontcolor=white:"
+        f"x=(w-text_w)/2:y=195:"
         f"shadowcolor=black@0.8:shadowx=2:shadowy=2"
     )
 
-    # 4) Per-ayah tekst blokken (gesynchroniseerd via enable='between(t,...)')
+    # Voortgangsbalk (dunne lijn onderaan die meegroeit met de tijd)
+    filters.append(
+        f"drawbox=x=0:y=h-10:w='iw*t/{totale_duur:.2f}':h=8:"
+        f"color=#FFD700@0.85:t=fill"
+    )
+    filters.append(
+        f"drawbox=x=0:y=h-10:w=iw:h=8:color=white@0.15:t=fill:enable='lt(t,0)'"
+    )
+
+    # Per-ayah tekst met sterkere 'actief' box
     t = 0.0
     for ay in ayahs:
         duur   = ay.get("duur", 4.0)
@@ -260,18 +263,18 @@ def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
         en_tekst = escape_ffmpeg(wrap(ay.get("en",""), 36))
         nl_tekst = escape_ffmpeg(wrap(ay.get("nl",""), 36))
 
-        # Tekstblok gecentreerd iets onder het midden (y=960 = midden van 1920)
-        y_ar = "680"
-        y_en = "840"
-        y_nl = "980"
+        y_ar = "660"
+        y_en = "830"
+        y_nl = "975"
 
         if ar_tekst:
             filters.append(
                 f"drawtext=text='{ar_tekst}':"
-                f"fontsize=44:fontcolor=#FFD700:"
+                f"fontsize=46:fontcolor=#FFD700:"
                 f"x=(w-text_w)/2:y={y_ar}:"
                 f"shadowcolor=black@0.95:shadowx=3:shadowy=3:"
-                f"box=1:boxcolor=black@0.6:boxborderw=16:"
+                f"box=1:boxcolor=black@0.65:boxborderw=18:"
+                f"line_spacing=10:"
                 f"enable='{tijdw}'"
             )
         if en_tekst:
@@ -294,33 +297,30 @@ def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
             )
         t = t_end
 
-    # 5) Footer label
     filters.append(
         f"drawtext=text='QuranShorts  |  Islam  |  Quran':"
         f"fontsize=26:fontcolor=#FFD700@0.6:"
-        f"x=(w-text_w)/2:y=h-80:"
+        f"x=(w-text_w)/2:y=h-45:"
         f"shadowcolor=black@0.7:shadowx=1:shadowy=1"
     )
 
     vf_tekst = ",".join(filters)
 
-    # ── ffmpeg commando ────────────────────────────────────────────────────
-    if gebruik_bg and BG_PAD.exists():
+    if vf_basis:
         vf_volledig = f"{vf_basis},{vf_tekst}"
         cmd = [
             "ffmpeg",
-            "-loop", "1", "-i", str(BG_PAD),
+            "-loop", "1", "-i", str(bg_pad),
             "-i", str(audio),
             "-vf", vf_volledig,
             "-map", "0:v", "-map", "1:a",
             "-shortest", "-t", str(MAX_SEC),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "24",
             "-c:a", "aac", "-b:a", "128k",
             "-pix_fmt", "yuv420p",
             str(output), "-y"
         ]
     else:
-        # Fallback: donkerblauwe achtergrond
         cmd = [
             "ffmpeg",
             "-f", "lavfi", "-i", "color=c=#0a1628:size=1080x1920:rate=30",
@@ -328,7 +328,7 @@ def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
             "-vf", vf_tekst,
             "-map", "0:v", "-map", "1:a",
             "-shortest", "-t", str(MAX_SEC),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "24",
             "-c:a", "aac", "-b:a", "128k",
             "-pix_fmt", "yuv420p",
             str(output), "-y"
@@ -339,7 +339,10 @@ def maak_video(audio, ayahs, surah, naam, output, gebruik_bg):
         print(f"    ffmpeg fout: {r.stderr[-300:]}")
     return r.returncode == 0
 
-# ─── YOUTUBE UPLOAD ───────────────────────────────────────────────────────────
+# ─── YOUTUBE UPLOAD (met quota-detectie) ──────────────────────────────────────
+class QuotaExceeded(Exception):
+    pass
+
 def upload(video, titel, beschr, tags):
     client_id     = os.environ.get("YT_CLIENT_ID","")
     client_secret = os.environ.get("YT_CLIENT_SECRET","")
@@ -379,7 +382,13 @@ def upload(video, titel, beschr, tags):
         json=meta
     )
     if r2.status_code != 200:
-        print(f"    Upload init fout: {r2.text[:100]}"); return None
+        # ── Quota-detectie: stop de hele run i.p.v. blind doorgaan ─────────
+        body = r2.text.lower()
+        if r2.status_code == 403 and ("quotaexceeded" in body or "quota" in body):
+            print(f"    ⛔ QUOTA OP voor vandaag: {r2.text[:150]}")
+            raise QuotaExceeded(r2.text[:200])
+        print(f"    Upload init fout: {r2.text[:150]}")
+        return None
 
     with open(video, "rb") as f:
         r3 = requests.put(
@@ -392,7 +401,13 @@ def upload(video, titel, beschr, tags):
         vid_id = r3.json().get("id","?")
         print(f"    ✅ https://youtu.be/{vid_id}")
         return vid_id
-    print(f"    Upload fout: {r3.text[:100]}"); return None
+
+    body = r3.text.lower()
+    if r3.status_code == 403 and "quota" in body:
+        print(f"    ⛔ QUOTA OP tijdens upload: {r3.text[:150]}")
+        raise QuotaExceeded(r3.text[:200])
+
+    print(f"    Upload fout: {r3.text[:150]}"); return None
 
 # ─── VOORTGANG ────────────────────────────────────────────────────────────────
 def laad_voortgang():
@@ -405,19 +420,22 @@ def sla_voortgang(data):
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 def run():
     print(f"\n{'='*52}")
-    print(f"  QURAN SHORTS BOT v5  {datetime.now().strftime('%H:%M  %d/%m/%Y')}")
+    print(f"  QURAN SHORTS BOT v6  {datetime.now().strftime('%H:%M  %d/%m/%Y')}")
     print(f"{'='*52}\n")
 
     WERKMAP.mkdir(parents=True, exist_ok=True)
 
-    # Achtergrond downloaden
-    gebruik_bg = zorg_achtergrond()
+    bg_paden = zorg_achtergronden()
 
-    vg       = laad_voortgang()
-    idx      = vg["idx"]
+    vg        = laad_voortgang()
+    idx       = vg["idx"]
     geplaatst = 0
+    quota_op  = False
 
     for i in range(VIDEOS_PER_DAG):
+        if quota_op:
+            break
+
         rec    = RECITEURS[i % len(RECITEURS)]
         seg    = SEGMENTEN[idx % len(SEGMENTEN)]
         surah, start, eind = seg
@@ -431,27 +449,24 @@ def run():
         audio = WERKMAP / f"audio_{i}.mp3"
         video = WERKMAP / f"video_{i}.mp4"
 
-        # ── Data ophalen (audio + 3 talen) ──────────────────────────────
         print("  Data ophalen (Arabisch + vertalingen)...")
         ayahs = haal_ayah_data(surah, start, eind, rec["edition"])
         if not ayahs:
             print("  Geen ayah data"); idx += 1; continue
 
-        # ── Audio duraties meten ─────────────────────────────────────────
         print("  Ayah duraties meten...")
         meet_duraties(ayahs, rec["edition"])
+        totale_duur = min(sum(a.get("duur", 4.0) for a in ayahs), MAX_SEC)
 
-        # ── Audio downloaden ─────────────────────────────────────────────
         print(f"  {len(ayahs)} ayahs downloaden...")
         if not download_audio_lijst(ayahs, rec["edition"], audio):
             print("  Download mislukt"); idx += 1; continue
 
-        # ── Video renderen ───────────────────────────────────────────────
-        print("  Video renderen...")
-        if not maak_video(audio, ayahs, surah, rec["naam"], video, gebruik_bg):
+        print("  Video renderen (met zoom + voortgangsbalk)...")
+        bg_pad = random.choice(bg_paden) if bg_paden else None
+        if not maak_video(audio, ayahs, surah, rec["naam"], video, bg_pad, totale_duur):
             print("  Video mislukt"); idx += 1; continue
 
-        # ── Upload ──────────────────────────────────────────────────────
         nr     = vg["totaal"] + 1
         titel  = f"Surah {surah} | {rec['naam']} | Quran Short #{nr}"
         beschr = (
@@ -465,10 +480,19 @@ def run():
                 rec["naam"], f"Surah{surah}", "DailyQuran",
                 "QuranRecitation","IslamicContent"]
 
-        print("  Uploaden naar YouTube...")
-        vid = upload(video, titel, beschr, tags)
+        # ── TESTMODUS: upload uitgeschakeld, geen quota verbruik ───────────
+        print(f"  🎬 Video opgeslagen: {video.resolve()}")
+        input("  Bekijk 'm, druk Enter om door te gaan...")
+        vid = "test"
+        # print("  Uploaden naar YouTube...")
+        # try:
+        #     vid = upload(video, titel, beschr, tags)
+        # except QuotaExceeded:
+        #     quota_op = True
+        #     vid = None
 
-        for p in [audio, video]:
+        # In testmodus NIET verwijderen zodat je de video kan bekijken
+        for p in [audio]:
             try: p.unlink()
             except: pass
 
@@ -477,7 +501,7 @@ def run():
             vg["gedaan"].append(sleutel)
             geplaatst += 1
             sla_voortgang(vg)
-            if i < VIDEOS_PER_DAG - 1:
+            if i < VIDEOS_PER_DAG - 1 and not quota_op:
                 print("  Wachten 30s..."); time.sleep(30)
 
         idx += 1
@@ -485,6 +509,9 @@ def run():
     vg["idx"] = idx
     sla_voortgang(vg)
     print(f"\n{'='*52}")
+    if quota_op:
+        print("  ⛔ Gestopt: YouTube quota voor vandaag is op.")
+        print("     Morgen gaat de bot automatisch verder (voortgang.json bewaard).")
     print(f"  Klaar! {geplaatst}/{VIDEOS_PER_DAG} geplaatst | Totaal: {vg['totaal']}")
     print(f"{'='*52}\n")
 
