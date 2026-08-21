@@ -34,6 +34,16 @@ BG_URLS = [
 ]
 WERKMAP_BG = WERKMAP / "bgs"
 
+# ─── LETTERTYPEN ──────────────────────────────────────────────────────────────
+# macOS heeft standaard Arabische lettertypen. Geeza Pro rendert Arabisch correct;
+# zonder expliciete fontfile pakt ffmpeg een fallback-font zonder Arabische glyphs
+# (vandaar de blokjes □□□ in de eerdere test).
+ARABISCH_FONT = "/System/Library/Fonts/Supplemental/GeezaPro.ttc"
+STANDAARD_FONT = "/System/Library/Fonts/Supplemental/Arial.ttf"
+
+def _font_bestaat(pad):
+    return Path(pad).exists()
+
 # ─── SEGMENTEN ────────────────────────────────────────────────────────────────
 SEGMENTEN = [
     (1,1,7),(112,1,4),(113,1,5),(114,1,6),(2,255,255),
@@ -44,7 +54,7 @@ SEGMENTEN = [
 ]
 
 EN_EDITION = "en.sahih"
-NL_EDITION = "nl.keyzer"
+NL_EDITION = "nl.leemhuis"  # moderne NL vertaling (was: nl.keyzer, ouderwets Nederlands)
 
 # ─── ACHTERGRONDEN DOWNLOADEN ─────────────────────────────────────────────────
 def zorg_achtergronden():
@@ -213,6 +223,11 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
     naam_veilig = escape_ffmpeg(naam)
     filters = []
 
+    # Fontfile-parameter opbouwen (leeg als het lettertype niet gevonden wordt,
+    # dan valt ffmpeg terug op zijn eigen standaard)
+    ar_font = f"fontfile='{ARABISCH_FONT}':" if _font_bestaat(ARABISCH_FONT) else ""
+    std_font = f"fontfile='{STANDAARD_FONT}':" if _font_bestaat(STANDAARD_FONT) else ""
+
     if bg_pad and Path(bg_pad).exists():
         # Ken Burns: langzame zoom-in over de hele duur van de video
         fps = 30
@@ -230,14 +245,14 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
 
     # Header
     filters.append(
-        f"drawtext=text='{naam_veilig}':"
+        f"drawtext={std_font}text='{naam_veilig}':"
         f"fontsize=58:fontcolor=#FFD700:"
         f"x=(w-text_w)/2:y=110:"
         f"shadowcolor=black@0.9:shadowx=3:shadowy=3:"
         f"box=1:boxcolor=black@0.45:boxborderw=14"
     )
     filters.append(
-        f"drawtext=text='Surah {surah}':"
+        f"drawtext={std_font}text='Surah {surah}':"
         f"fontsize=40:fontcolor=white:"
         f"x=(w-text_w)/2:y=195:"
         f"shadowcolor=black@0.8:shadowx=2:shadowy=2"
@@ -269,7 +284,7 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
 
         if ar_tekst:
             filters.append(
-                f"drawtext=text='{ar_tekst}':"
+                f"drawtext={ar_font}text='{ar_tekst}':"
                 f"fontsize=46:fontcolor=#FFD700:"
                 f"x=(w-text_w)/2:y={y_ar}:"
                 f"shadowcolor=black@0.95:shadowx=3:shadowy=3:"
@@ -279,7 +294,7 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
             )
         if en_tekst:
             filters.append(
-                f"drawtext=text='{en_tekst}':"
+                f"drawtext={std_font}text='{en_tekst}':"
                 f"fontsize=30:fontcolor=white:"
                 f"x=(w-text_w)/2:y={y_en}:"
                 f"shadowcolor=black@0.9:shadowx=2:shadowy=2:"
@@ -288,7 +303,7 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
             )
         if nl_tekst:
             filters.append(
-                f"drawtext=text='{nl_tekst}':"
+                f"drawtext={std_font}text='{nl_tekst}':"
                 f"fontsize=30:fontcolor=#DDDDDD:"
                 f"x=(w-text_w)/2:y={y_nl}:"
                 f"shadowcolor=black@0.9:shadowx=2:shadowy=2:"
@@ -298,7 +313,7 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
         t = t_end
 
     filters.append(
-        f"drawtext=text='QuranShorts  |  Islam  |  Quran':"
+        f"drawtext={std_font}text='QuranShorts  |  Islam  |  Quran':"
         f"fontsize=26:fontcolor=#FFD700@0.6:"
         f"x=(w-text_w)/2:y=h-45:"
         f"shadowcolor=black@0.7:shadowx=1:shadowy=1"
