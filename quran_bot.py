@@ -1,99 +1,3 @@
-#!/usr/bin/env python3
-import os, json, time, random, subprocess, requests, textwrap
-from datetime import datetime
-from pathlib import Path
-
-# ─── RECITEURS ────────────────────────────────────────────────────────────────
-RECITEURS = [
-    {"naam": "Al-Dosari",  "edition": "ar.muhammadayyoub"},
-    {"naam": "Mishary",    "edition": "ar.alafasy"},
-    {"naam": "Sudais",     "edition": "ar.abdurrahmaansudais"},
-    {"naam": "Al-Afasy",   "edition": "ar.alafasy"},
-    {"naam": "Shamsan",    "edition": "ar.shaatree"},
-]
-
-# ─── INSTELLINGEN ─────────────────────────────────────────────────────────────
-# BELANGRIJK: verlaagd van 5 naar 3. Elke upload kost 1600 quota-units.
-# Gratis YouTube Data API quota = 10.000 units/dag.
-# 3 uploads = 4800 units -> ruime marge over voor de losse metadata-calls
-# en voor eventuele retries zonder dat je over de limiet gaat.
-VIDEOS_PER_DAG = 3
-MAX_SEC        = 59
-WERKMAP        = Path("./tmp")
-API_BASE       = "http://api.alquran.cloud/v1"
-CDN_BASE       = "https://cdn.islamic.network/quran/audio/128"
-HEADERS        = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-
-# ── Meerdere achtergronden i.p.v. 1 vaste foto ────────────────────────────────
-BG_URLS = [
-    "https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=1080&q=85",  # moskee interieur
-    "https://images.unsplash.com/photo-1591604129939-f1efa4d9f7fa?w=1080&q=85",  # moskee koepel
-    "https://images.unsplash.com/photo-1519817650390-64a93db51149?w=1080&q=85",  # minaret zonsondergang
-    "https://images.unsplash.com/photo-1564769625392-651b2c7e1c73?w=1080&q=85",  # moskee nacht
-    "https://images.unsplash.com/photo-1600001780252-d8d1d5c8f8f2?w=1080&q=85",  # woestijn/lucht
-]
-WERKMAP_BG = WERKMAP / "bgs"
-
-# ─── LETTERTYPEN ──────────────────────────────────────────────────────────────
-# macOS heeft standaard Arabische lettertypen. Geeza Pro rendert Arabisch correct;
-# zonder expliciete fontfile pakt ffmpeg een fallback-font zonder Arabische glyphs
-# (vandaar de blokjes □□□ in de eerdere test).
-ARABISCH_FONT = "/System/Library/Fonts/Supplemental/GeezaPro.ttc"
-STANDAARD_FONT = "/System/Library/Fonts/Supplemental/Arial.ttf"
-
-def _font_bestaat(pad):
-    return Path(pad).exists()
-
-# ─── SEGMENTEN ────────────────────────────────────────────────────────────────
-SEGMENTEN = [
-    (1,1,7),(112,1,4),(113,1,5),(114,1,6),(2,255,255),
-    (2,285,286),(67,1,5),(36,1,12),(55,1,13),(18,1,10),
-    (19,1,11),(56,1,12),(78,1,16),(87,1,19),(93,1,11),
-    (94,1,8),(95,1,8),(97,1,5),(99,1,8),(108,1,3),
-    (3,1,10),(4,1,10),(5,1,10),(7,1,10),(10,1,10),
-]
-
-EN_EDITION = "en.sahih"
-NL_EDITION = "nl.leemhuis"  # moderne NL vertaling (was: nl.keyzer, ouderwets Nederlands)
-
-# ─── ACHTERGRONDEN DOWNLOADEN ─────────────────────────────────────────────────
-def zorg_achtergronden():
-    """Download alle achtergrondfoto's eenmalig (als ze nog niet bestaan)."""
-    WERKMAP_BG.mkdir(parents=True, exist_ok=True)
-    paden = []
-    for i, url in enumerate(BG_URLS):
-        pad = WERKMAP_BG / f"bg_{i}.jpg"
-        if pad.exists() and pad.stat().st_size > 10_000:
-            paden.append(pad)
-            continue
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
-            if r.status_code == 200 and len(r.content) > 10_000:
-                pad.write_bytes(r.content)
-                paden.append(pad)
-                print(f"  ✅ Achtergrond {i+1}/{len(BG_URLS)} opgeslagen")
-        except Exception as e:
-            print(f"  ⚠ Achtergrond {i+1} mislukt: {e}")
-    return paden
-
-# ─── AYAH DATA OPHALEN ────────────────────────────────────────────────────────
-def haal_ayah_data(surah, start, eind, edition):
-    ayahs = []
-    try:
-        url_ar = f"{API_BASE}/surah/{surah}/{edition}"
-        r_ar   = requests.get(url_ar, headers=HEADERS, timeout=20)
-        if r_ar.status_code != 200:
-            print(f"    AR API fout {r_ar.status_code}"); return ayahs
-        data_ar = r_ar.json()["data"]["ayahs"]
-
-        url_en = f"{API_BASE}/surah/{surah}/{EN_EDITION}"
-        r_en   = requests.get(url_en, headers=HEADERS, timeout=20)
-        data_en = r_en.json()["data"]["ayahs"] if r_en.status_code == 200 else []
-
-        url_nl = f"{API_BASE}/surah/{surah}/{NL_EDITION}"
-        r_nl   = requests.get(url_nl, headers=HEADERS, timeout=20)
-        data_nl = r_nl.json()["data"]["ayahs"] if r_nl.status_code == 200 else []
-
         en_map = {a["numberInSurah"]: a["text"] for a in data_en}
         nl_map = {a["numberInSurah"]: a["text"] for a in data_nl}
 
@@ -194,12 +98,6 @@ def meet_duraties(ayahs, edition):
             ay["duur"] = 4.0
 
 # ─── TEKST HELPERS ────────────────────────────────────────────────────────────
-def wrap(tekst, breedte=32):
-    if not tekst:
-        return ""
-    regels = textwrap.wrap(tekst, width=breedte)
-    return r"\n".join(regels)
-
 def escape_ffmpeg(tekst):
     return (tekst
         .replace("\\", "\\\\")
@@ -210,26 +108,22 @@ def escape_ffmpeg(tekst):
         .replace("]",  r"\]")
     )
 
-# ─── VIDEO RENDEREN (verbeterde visuals) ──────────────────────────────────────
+def wrap_en_escape(tekst, breedte=32):
+    if not tekst:
+        return ""
+    regels = textwrap.wrap(tekst, width=breedte)
+    regels_escaped = [escape_ffmpeg(r) for r in regels]
+    return r"\n".join(regels_escaped)
+
+# ─── VIDEO RENDEREN ────────────────────────────────────────────────────────────
 def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
-    """
-    Verbeteringen t.o.v. v5:
-      - Random achtergrond per video i.p.v. altijd dezelfde
-      - Langzame Ken Burns zoom op de achtergrond (subtiele beweging)
-      - Duidelijkere 'actieve ayah' highlight met gouden rand-achtige box
-      - Voortgangsbalk onderaan die meeloopt met de audio
-      - Iets sterkere vignette voor leesbaarheid
-    """
     naam_veilig = escape_ffmpeg(naam)
     filters = []
 
-    # Fontfile-parameter opbouwen (leeg als het lettertype niet gevonden wordt,
-    # dan valt ffmpeg terug op zijn eigen standaard)
-    ar_font = f"fontfile='{ARABISCH_FONT}':" if _font_bestaat(ARABISCH_FONT) else ""
-    std_font = f"fontfile='{STANDAARD_FONT}':" if _font_bestaat(STANDAARD_FONT) else ""
+    ar_font = f"font='{ARABISCH_FONTNAAM}':" if _fontconfig_beschikbaar() else ""
+    std_font = f"font='{STANDAARD_FONTNAAM}':" if _fontconfig_beschikbaar() else ""
 
     if bg_pad and Path(bg_pad).exists():
-        # Ken Burns: langzame zoom-in over de hele duur van de video
         fps = 30
         totaal_frames = max(1, int(totale_duur * fps))
         zoom_expr = f"zoom+0.0006"
@@ -243,7 +137,6 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
     else:
         vf_basis = None
 
-    # Header
     filters.append(
         f"drawtext={std_font}text='{naam_veilig}':"
         f"fontsize=58:fontcolor=#FFD700:"
@@ -258,7 +151,6 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
         f"shadowcolor=black@0.8:shadowx=2:shadowy=2"
     )
 
-    # Voortgangsbalk (dunne lijn onderaan die meegroeit met de tijd)
     filters.append(
         f"drawbox=x=0:y=h-10:w='iw*t/{totale_duur:.2f}':h=8:"
         f"color=#FFD700@0.85:t=fill"
@@ -267,16 +159,15 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
         f"drawbox=x=0:y=h-10:w=iw:h=8:color=white@0.15:t=fill:enable='lt(t,0)'"
     )
 
-    # Per-ayah tekst met sterkere 'actief' box
     t = 0.0
     for ay in ayahs:
         duur   = ay.get("duur", 4.0)
         t_end  = t + duur
         tijdw  = f"between(t,{t:.2f},{t_end:.2f})"
 
-        ar_tekst = escape_ffmpeg(wrap(ay.get("ar",""), 26))
-        en_tekst = escape_ffmpeg(wrap(ay.get("en",""), 36))
-        nl_tekst = escape_ffmpeg(wrap(ay.get("nl",""), 36))
+        ar_tekst = wrap_en_escape(ay.get("ar",""), 26)
+        en_tekst = wrap_en_escape(ay.get("en",""), 36)
+        nl_tekst = wrap_en_escape(ay.get("nl",""), 36)
 
         y_ar = "660"
         y_en = "830"
@@ -354,7 +245,7 @@ def maak_video(audio, ayahs, surah, naam, output, bg_pad, totale_duur):
         print(f"    ffmpeg fout: {r.stderr[-300:]}")
     return r.returncode == 0
 
-# ─── YOUTUBE UPLOAD (met quota-detectie) ──────────────────────────────────────
+# ─── YOUTUBE UPLOAD ────────────────────────────────────────────────────────────
 class QuotaExceeded(Exception):
     pass
 
@@ -397,7 +288,6 @@ def upload(video, titel, beschr, tags):
         json=meta
     )
     if r2.status_code != 200:
-        # ── Quota-detectie: stop de hele run i.p.v. blind doorgaan ─────────
         body = r2.text.lower()
         if r2.status_code == 403 and ("quotaexceeded" in body or "quota" in body):
             print(f"    ⛔ QUOTA OP voor vandaag: {r2.text[:150]}")
@@ -499,14 +389,7 @@ def run():
         print(f"  🎬 Video opgeslagen: {video.resolve()}")
         input("  Bekijk 'm, druk Enter om door te gaan...")
         vid = "test"
-        # print("  Uploaden naar YouTube...")
-        # try:
-        #     vid = upload(video, titel, beschr, tags)
-        # except QuotaExceeded:
-        #     quota_op = True
-        #     vid = None
 
-        # In testmodus NIET verwijderen zodat je de video kan bekijken
         for p in [audio]:
             try: p.unlink()
             except: pass
