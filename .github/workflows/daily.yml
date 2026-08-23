@@ -1,0 +1,68 @@
+name: Quran Shorts
+
+on:
+  schedule:
+    - cron: "0 5 * * *"        # cron is ALTIJD UTC = 07:00 NL zomertijd
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Alleen renderen, niet uploaden"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write               # nodig om voortgang.json terug te committen
+
+jobs:
+  shorts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Zonder libraqm shapet Pillow het Arabisch niet en krijg je GEEN fout.
+      # Zonder de fonts krijg je lege blokjes.
+      - name: Systeempakketten
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            ffmpeg libraqm0 fonts-hosny-amiri fonts-dejavu-core
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Demo-render als preflight
+        run: python quran_shorts.py --demo
+
+      - name: Shorts genereren
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python quran_shorts.py --count 5 --dry-run
+          else
+            python quran_shorts.py --count 5
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shorts-${{ github.run_number }}
+          path: output/
+          retention-days: 14
+
+      - name: Voortgang bewaren
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add voortgang.json
+          git diff --staged --quiet || git commit -m "chore: voortgang"
+          git push
