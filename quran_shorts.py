@@ -682,7 +682,7 @@ def main() -> None:
 
         try:
             vid = upload(resultaat["video"], titel, beschrijving, tags,
-                         privacy="public" if args.public else "unlisted")
+                         privacy="public")
         except QuotaOp:
             print("\n  QUOTA OP voor vandaag. Voortgang bewaard, morgen verder.")
             break
