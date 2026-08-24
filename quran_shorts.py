@@ -52,7 +52,7 @@ HEADERS = {"User-Agent": "quran-shorts-bot/7.0"}
 # Tekst-edities (alquran.cloud). Controleer met --lijst-edities.
 ED_ARABISCH = "quran-uthmani"      # mét harakat
 ED_ENGELS = "en.sahih"
-ED_NEDERLANDS = "nl.keyzer"
+ED_NEDERLANDS = "nl.siregar"
 
 RECITEURS = [
     {"naam": "Mishary Alafasy", "edition": "ar.alafasy"},
