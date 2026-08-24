@@ -2,7 +2,9 @@ name: Quran Shorts
 
 on:
   schedule:
-    - cron: "0 5 * * *"        # cron is ALTIJD UTC = 07:00 NL zomertijd
+    - cron: "17 6 * * *"
+    - cron: "17 13 * * *"
+    - cron: "17 19 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -11,7 +13,7 @@ on:
         default: true
 
 permissions:
-  contents: write               # nodig om voortgang.json terug te committen
+  contents: write
 
 jobs:
   shorts:
@@ -21,8 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Zonder libraqm shapet Pillow het Arabisch niet en krijg je GEEN fout.
-      # Zonder de fonts krijg je lege blokjes.
       - name: Systeempakketten
         run: |
           sudo apt-get update -qq
@@ -39,22 +39,22 @@ jobs:
       - name: Demo-render als preflight
         run: python quran_shorts.py --demo
 
-      - name: Shorts genereren
+      - name: Short maken en posten
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python quran_shorts.py --count 5 --dry-run
+            python quran_shorts.py --count 1 --dry-run
           else
-            python quran_shorts.py --count 5
+            python quran_shorts.py --count 1
           fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: shorts-${{ github.run_number }}
+          name: short-${{ github.run_number }}
           path: output/
           retention-days: 14
 
@@ -63,6 +63,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase
           git add voortgang.json
           git diff --staged --quiet || git commit -m "chore: voortgang"
           git push
