@@ -14,6 +14,13 @@ Gebruik:
 Belangrijkste verschil met v6: de tekst wordt door Pillow gerenderd naar
 transparante PNG's die FFmpeg alleen nog overheen legt. FFmpeg raakt geen
 letter Arabisch aan. Zie NOTES onderaan dit bestand voor het waarom.
+
+FIX (v7.1): reciteur-selectie gebruikte i % len(RECITEURS). Met
+--count 1 (zoals de workflow gebruikt) is i altijd 0, dus werd ALTIJD
+dezelfde reciteur gekozen. Zodra alle SEGMENTEN met die ene reciteur
+ooit geplaatst waren, sloeg de bot voor altijd alles over (stille no-op,
+geen fout). Nu gebruikt reciteur-selectie idx, die wél persistent
+doorloopt over losse workflow-runs heen. Zie main().
 """
 from __future__ import annotations
 
@@ -644,7 +651,12 @@ def main() -> None:
 
     for i in range(args.count):
         seg = SEGMENTEN[idx % len(SEGMENTEN)]
-        rec = RECITEURS[i % len(RECITEURS)]
+        # FIX: was RECITEURS[i % len(RECITEURS)] — met --count 1 (zoals de
+        # workflow gebruikt) is i altijd 0, dus werd ALTIJD dezelfde
+        # reciteur gekozen. idx loopt wel persistent door over losse
+        # workflow-runs heen (bewaard in voortgang.json), dus daarmee
+        # roteren de reciteurs nu ook echt.
+        rec = RECITEURS[idx % len(RECITEURS)]
         sleutel = f"{rec['naam']}_{seg[0]}_{seg[1]}"
         idx += 1
 
@@ -682,7 +694,7 @@ def main() -> None:
 
         try:
             vid = upload(resultaat["video"], titel, beschrijving, tags,
-                         privacy="public")
+                         privacy="public" if args.public else "unlisted")
         except QuotaOp:
             print("\n  QUOTA OP voor vandaag. Voortgang bewaard, morgen verder.")
             break
@@ -742,3 +754,9 @@ if __name__ == "__main__":
 #
 # 9. Ayat zonder audio worden verwijderd i.p.v. met een gegokte duur van
 #    4.0s meegenomen — anders loopt alle tekst erna uit de pas.
+#
+# 10. (v7.1) Reciteur-selectie gebruikte i % len(RECITEURS) i.p.v.
+#     idx % len(RECITEURS). Met --count 1 was i altijd 0, dus werd nooit
+#     geroteerd tussen reciteurs. Zodra alle 12 SEGMENTEN met reciteur #1
+#     ooit geplaatst waren, sloeg de bot stilzwijgend en voor altijd alles
+#     over: geen foutmelding, workflow "succeeded", maar 0 nieuwe video's.
